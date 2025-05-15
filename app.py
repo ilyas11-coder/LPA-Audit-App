@@ -4,42 +4,78 @@ from fpdf import FPDF
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import hashlib
+import os
 
-# Email settings
+# ---------- CONFIG ---------- #
+ADMIN_EMAIL = "i.htouch@miamaroc.com"
+ADMIN_PASSWORD = "admin123"  # Change as needed
+USERS_FILE = "users.xlsx"
+
 SENDER_EMAIL = "ilyaswork.11@gmail.com"
 SENDER_PASSWORD = "estk iyov khoo tjio"  # Use Gmail app password
-RECEIVER_EMAIL = "ilyaswork.11@gmail.com"  # Email to receive reports
+RECEIVER_EMAIL = "ilyaswork.11@gmail.com"
 
-# Load planning and checklist from Excel
+# Ensure users file exists
+if not os.path.exists(USERS_FILE):
+    df_init = pd.DataFrame(columns=["name", "email", "password", "department"])
+    df_init.to_excel(USERS_FILE, index=False)
+
+# Load planning and checklist
 planning = pd.read_excel("planning.xlsx")
 checklist_data = pd.read_excel("checklist.xlsx")
 
-# User login info
-users = {
-    "auditor1": {"password": "123", "role": "auditor"},
-    "auditor2": {"password": "123", "role": "auditor"},
-    "admin": {"password": "admin", "role": "admin"}
-}
-
-# Login state
-if "user" not in st.session_state:
-    st.session_state.user = None
-
 # ---------- FUNCTIONS ---------- #
+def hash_password(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
 
+def register():
+    st.title("📝 Register")
+    name = st.text_input("Full Name")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    
+    department = st.selectbox("Department", [
+        "Management", "Quality", "Human Resources", 
+        "Engineering", "Production", "Logistics", "Maintenance"
+    ])
+
+    if st.button("Register"):
+        if name and email and password and department:
+            df = pd.read_excel(USERS_FILE)
+            if email in df['email'].values:
+                st.error("Email already registered.")
+            else:
+                new_user = pd.DataFrame([[name, email, hash_password(password), department]],
+                                        columns=["name", "email", "password", "department"])
+                df = pd.concat([df, new_user], ignore_index=True)
+                df.to_excel(USERS_FILE, index=False)
+                st.success("Registered successfully. You can now log in.")
+        else:
+            st.warning("Please fill in all fields.")
 
 def login():
-    st.title("🔐 LPA Audit Login")
-    username = st.text_input("Username")
+    st.title("🔐 Login")
+    email = st.text_input("Email")
     password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if username in users and users[username]["password"] == password:
-            st.session_state.user = username
-            st.session_state.role = users[username]["role"]
-            st.success("Login successful")
-        else:
-            st.error("Invalid login")
 
+    if st.button("Login"):
+        if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
+            st.session_state.user = "Admin"
+            st.session_state.role = "admin"
+        else:
+            df = pd.read_excel(USERS_FILE)
+            row = df[df['email'] == email]
+            if not row.empty and row.iloc[0]['password'] == hash_password(password):
+                st.session_state.user = row.iloc[0]['name']
+                st.session_state.role = "auditor"
+                st.session_state.department = row.iloc[0]['department']
+            else:
+                st.error("Invalid email or password")
+
+    st.markdown("---")
+    if st.button("Register Instead"):
+        st.session_state.page = "register"
 
 def action_plan_ui(q):
     st.warning(f"⚠ Action Plan for: {q}")
@@ -53,7 +89,6 @@ def action_plan_ui(q):
         "responsible": responsible,
         "deadline": str(deadline)
     }
-
 
 def show_checklist(zone, name):
     st.subheader(f"📋 Checklist for {zone}")
@@ -90,7 +125,6 @@ def show_checklist(zone, name):
         generate_and_send_pdf(name)
         st.success("📤 PDF sent by email.")
 
-
 def show_dashboard():
     st.title("📊 Dashboard")
     total = len(planning)
@@ -100,9 +134,12 @@ def show_dashboard():
     st.metric("Open Actions", str(total - done))
     st.metric("Closed Actions", str(done))
 
-
 def admin_panel():
     st.title("🛠 Admin Panel")
+    st.subheader("Registered Users:")
+    df = pd.read_excel(USERS_FILE)
+    st.dataframe(df)
+
     st.subheader("Current Planning:")
     st.dataframe(planning)
 
@@ -110,7 +147,6 @@ def admin_panel():
     st.dataframe(checklist_data)
 
     st.info("To update planning or checklist, just replace the Excel files and reload the app.")
-
 
 def send_late_emails():
     try:
@@ -142,7 +178,6 @@ def send_late_emails():
         st.success("Late action emails sent.")
     except FileNotFoundError:
         st.error("action_plans.xlsx not found.")
-
 
 def generate_and_send_pdf(name):
     try:
@@ -183,14 +218,21 @@ def generate_and_send_pdf(name):
         st.error(f"❌ Failed to generate/send PDF: {e}")
 
 # ---------- APP FLOW ---------- #
-
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "page" not in st.session_state:
+    st.session_state.page = "login"
 
 if st.session_state.user is None:
-    login()
+    if st.session_state.page == "register":
+        register()
+    else:
+        login()
 else:
     st.sidebar.title(f"Welcome, {st.session_state.user}")
     if st.sidebar.button("Logout"):
         st.session_state.user = None
+        st.session_state.page = "login"
         st.rerun()
 
     role = st.session_state.role
