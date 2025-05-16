@@ -78,8 +78,8 @@ def login():
             st.session_state.role = "admin"
         else:
             user_records = sheet.get_all_records()
-df = pd.DataFrame(user_records)
-row = df[df['email'] == email]
+            df = pd.DataFrame(user_records)
+            row = df[df['email'] == email]
             if not row.empty and row.iloc[0]['password'] == hash_password(password):
                 st.session_state.user = row.iloc[0]['name']
                 st.session_state.role = "auditor"
