@@ -1,33 +1,46 @@
+# import os
 import yagmail
 from fpdf import FPDF
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import hashlib
+import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ---------- CONFIG ---------- #
 ADMIN_EMAIL = "i.htouch@miamaroc.com"
 ADMIN_PASSWORD = "admin123"  # Change as needed
+USERS_FILE = "users.xlsx"
 
 SENDER_EMAIL = "ilyaswork.11@gmail.com"
-SENDER_PASSWORD = "estk iyov khoo tjio"
+SENDER_PASSWORD = "estk iyov khoo tjio"  # Use Gmail app password
 RECEIVER_EMAIL = "ilyaswork.11@gmail.com"
 
-# ---------- GOOGLE SHEETS SETUP ---------- #
+# Google Sheets setup (make sure service_account.json is in /.streamlit/secrets.toml or root)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
 client = gspread.authorize(creds)
-sheet = client.open("LPA_Users").sheet1  # Must be created manually with correct headers
 
-# ---------- FILE LOAD ---------- #
+# Connect to user and action plan sheets
+sheet = client.open("LPA_Users").sheet1
+action_plan_sheet = client.open("LPA_ActionPlans").sheet1
+
+# Ensure users file exists (used only locally for admin view)
+if not os.path.exists(USERS_FILE):
+    df_init = pd.DataFrame(columns=["name", "email", "password", "department"])
+    df_init.to_excel(USERS_FILE, index=False)
+
+# Load planning and checklist
 planning = pd.read_excel("planning.xlsx")
 checklist_data = pd.read_excel("checklist.xlsx")
+
 
 # ---------- FUNCTIONS ---------- #
 def hash_password(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
+
 
 def register():
     st.title("📝 Register")
@@ -40,7 +53,7 @@ def register():
 
     if st.button("Register"):
         if name and email and password and department:
-            all_emails = [row[1] for row in sheet.get_all_values()[1:]]  # Skip header
+            all_emails = [row[1] for row in sheet.get_all_values()[1:]]  # Skip header row
             if email in all_emails:
                 st.error("Email already registered.")
             else:
@@ -49,6 +62,7 @@ def register():
                 st.success("✅ Registered successfully. You can now log in.")
         else:
             st.warning("⚠ Please fill in all fields.")
+
 
 def login():
     st.title("🔐 Login")
@@ -60,19 +74,19 @@ def login():
             st.session_state.user = "Admin"
             st.session_state.role = "admin"
         else:
-            users = sheet.get_all_records()
-            for user in users:
-                if user["email"] == email and user["password"] == hash_password(password):
-                    st.session_state.user = user["name"]
-                    st.session_state.role = "auditor"
-                    st.session_state.department = user["department"]
-                    break
+            df = pd.read_excel(USERS_FILE)
+            row = df[df['email'] == email]
+            if not row.empty and row.iloc[0]['password'] == hash_password(password):
+                st.session_state.user = row.iloc[0]['name']
+                st.session_state.role = "auditor"
+                st.session_state.department = row.iloc[0]['department']
             else:
                 st.error("Invalid email or password")
 
     st.markdown("---")
     if st.button("Register Instead"):
         st.session_state.page = "register"
+
 
 def action_plan_ui(q):
     st.warning(f"⚠ Action Plan for: {q}")
@@ -86,6 +100,7 @@ def action_plan_ui(q):
         "responsible": responsible,
         "deadline": str(deadline)
     }
+
 
 def show_checklist(zone, name):
     st.subheader(f"📋 Checklist for {zone}")
@@ -110,17 +125,20 @@ def show_checklist(zone, name):
         st.success("Audit saved.")
 
         if actions:
-            try:
-                old_actions = pd.read_excel("action_plans.xlsx")
-                combined = pd.concat([old_actions, pd.DataFrame(actions)], ignore_index=True)
-            except FileNotFoundError:
-                combined = pd.DataFrame(actions)
+            headers = ["auditor", "zone", "date", "question", "issue", "action", "responsible", "deadline"]
+            existing = action_plan_sheet.get_all_values()
+            if not existing or existing[0] != headers:
+                action_plan_sheet.insert_row(headers, 1)
 
-            combined.to_excel("action_plans.xlsx", index=False)
-            st.success("Action Plans saved to action_plans.xlsx")
+            for action in actions:
+                row_data = [action.get(col, "") for col in headers]
+                action_plan_sheet.append_row(row_data)
+
+            st.success("✅ Action Plans saved to Google Sheet.")
 
         generate_and_send_pdf(name)
         st.success("📤 PDF sent by email.")
+
 
 def show_dashboard():
     st.title("📊 Dashboard")
@@ -131,11 +149,12 @@ def show_dashboard():
     st.metric("Open Actions", str(total - done))
     st.metric("Closed Actions", str(done))
 
+
 def admin_panel():
     st.title("🛠 Admin Panel")
     st.subheader("Registered Users:")
-    users = pd.DataFrame(sheet.get_all_records())
-    st.dataframe(users)
+    df = pd.read_excel(USERS_FILE)
+    st.dataframe(df)
 
     st.subheader("Current Planning:")
     st.dataframe(planning)
@@ -145,11 +164,13 @@ def admin_panel():
 
     st.info("To update planning or checklist, just replace the Excel files and reload the app.")
 
+
 def send_late_emails():
     try:
-        df = pd.read_excel("action_plans.xlsx")
+        records = action_plan_sheet.get_all_records()
+        df = pd.DataFrame(records)
+        df["deadline"] = pd.to_datetime(df["deadline"], errors='coerce')
         today = pd.to_datetime(datetime.today().date())
-        df["deadline"] = pd.to_datetime(df["deadline"])
 
         late = df[df["deadline"] < today]
         if late.empty:
@@ -173,12 +194,13 @@ def send_late_emails():
                 st.error(f"Email failed: {e}")
 
         st.success("Late action emails sent.")
-    except FileNotFoundError:
-        st.error("action_plans.xlsx not found.")
+    except Exception as e:
+        st.error(f"❌ Failed to load or send late actions: {e}")
 
 def generate_and_send_pdf(name):
     try:
-        df = pd.read_excel("action_plans.xlsx")
+        records = action_plan_sheet.get_all_records()
+        df = pd.DataFrame(records)
         user_data = df[df["auditor"] == name]
         if user_data.empty:
             return
@@ -213,6 +235,7 @@ def generate_and_send_pdf(name):
         )
     except Exception as e:
         st.error(f"❌ Failed to generate/send PDF: {e}")
+
 
 # ---------- APP FLOW ---------- #
 if "user" not in st.session_state:
@@ -253,4 +276,5 @@ else:
     st.subheader("📧 Send Emails for Late Actions")
     if st.button("Send Late Emails"):
         send_late_emails()
+
 
