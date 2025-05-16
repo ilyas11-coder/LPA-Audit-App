@@ -8,7 +8,7 @@ import hashlib
 import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
+import json
 # ---------- CONFIG ---------- #
 ADMIN_EMAIL = "i.htouch@miamaroc.com"
 ADMIN_PASSWORD = "admin123"  # Change as needed
@@ -20,7 +20,8 @@ RECEIVER_EMAIL = "ilyaswork.11@gmail.com"
 
 # Google Sheets setup (make sure service_account.json is in /.streamlit/secrets.toml or root)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+service_account_info = json.loads(st.secrets["gcp_service_account"])
+creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
 client = gspread.authorize(creds)
 
 # Connect to user and action plan sheets
@@ -276,5 +277,3 @@ else:
     st.subheader("📧 Send Emails for Late Actions")
     if st.button("Send Late Emails"):
         send_late_emails()
-
-   
