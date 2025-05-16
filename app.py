@@ -104,6 +104,60 @@ def action_plan_ui(q):
         "deadline": str(deadline)
     }
 
+def show_auditor_view(name):
+    st.title("🗓 Your Assigned Audits")
+
+    my_rows = planning[(planning["name"] == name) & (planning["checklist_done"] != "Yes")]
+
+    if my_rows.empty:
+        st.info("✅ You have no pending audits.")
+        return
+
+    zones_to_do = my_rows["zone"].tolist()
+    if not zones_to_do:
+        st.info("✅ All checklists completed.")
+        return
+
+    tabs = st.tabs(zones_to_do)
+
+    for i, zone in enumerate(zones_to_do):
+        with tabs[i]:
+            st.subheader(f"📋 Checklist - Zone: {zone}")
+            questions = checklist_data[checklist_data["zone"] == zone]["question"].tolist()
+            actions = []
+
+            for q in questions:
+                answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=f"{zone}_{q}")
+                if answer == "NC":
+                    action_data = action_plan_ui(q)
+                    action_data.update({
+                        "auditor": name,
+                        "zone": zone,
+                        "date": datetime.today().strftime("%Y-%m-%d"),
+                        "question": q
+                    })
+                    actions.append(action_data)
+
+            if st.button(f"✅ Submit Audit for {zone}", key=f"submit_{zone}"):
+                planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
+                planning.to_excel("planning.xlsx", index=False)
+                st.success(f"✔ Audit for {zone} saved.")
+
+                if actions:
+                    headers = ["auditor", "zone", "date", "question", "issue", "action", "responsible", "deadline"]
+                    existing = action_plan_sheet.get_all_values()
+                    if not existing or existing[0] != headers:
+                        action_plan_sheet.insert_row(headers, 1)
+
+                    for action in actions:
+                        row_data = [action.get(col, "") for col in headers]
+                        action_plan_sheet.append_row(row_data)
+
+                    st.success(f"✅ Action Plans for {zone} saved.")
+
+                generate_and_send_pdf(name)
+                st.success("📤 PDF sent by email.")
+
 
 def show_checklist(zone, name):
     st.subheader(f"📋 Checklist for {zone}")
@@ -262,14 +316,8 @@ else:
     name = st.session_state.user
 
     if role == "auditor":
-        st.title("🗓 Your Audit Tasks")
-        my_rows = planning[(planning["name"] == name) & (planning["checklist_done"] == "No")]
-        if my_rows.empty:
-            st.info("✅ You have no pending audits.")
-        else:
-            for _, row in my_rows.iterrows():
-                st.subheader(f"{row['date']} - {row['zone']}")
-                show_checklist(row["zone"], name)
+        show_auditor_view(name)
+
 
     elif role == "admin":
         show_dashboard()
