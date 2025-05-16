@@ -1,0 +1,256 @@
+import yagmail
+from fpdf import FPDF
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+import hashlib
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+# ---------- CONFIG ---------- #
+ADMIN_EMAIL = "i.htouch@miamaroc.com"
+ADMIN_PASSWORD = "admin123"  # Change as needed
+
+SENDER_EMAIL = "ilyaswork.11@gmail.com"
+SENDER_PASSWORD = "estk iyov khoo tjio"
+RECEIVER_EMAIL = "ilyaswork.11@gmail.com"
+
+# ---------- GOOGLE SHEETS SETUP ---------- #
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+client = gspread.authorize(creds)
+sheet = client.open("LPA_Users").sheet1  # Must be created manually with correct headers
+
+# ---------- FILE LOAD ---------- #
+planning = pd.read_excel("planning.xlsx")
+checklist_data = pd.read_excel("checklist.xlsx")
+
+# ---------- FUNCTIONS ---------- #
+def hash_password(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+def register():
+    st.title("📝 Register")
+    name = st.text_input("Full Name")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    department = st.selectbox("Department", [
+        "Management", "Quality", "Human Ressources", "Engineering", "Production", "Logistics", "Maintenance"
+    ])
+
+    if st.button("Register"):
+        if name and email and password and department:
+            all_emails = [row[1] for row in sheet.get_all_values()[1:]]  # Skip header
+            if email in all_emails:
+                st.error("Email already registered.")
+            else:
+                hashed_pw = hash_password(password)
+                sheet.append_row([name, email, hashed_pw, department])
+                st.success("✅ Registered successfully. You can now log in.")
+        else:
+            st.warning("⚠ Please fill in all fields.")
+
+def login():
+    st.title("🔐 Login")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
+            st.session_state.user = "Admin"
+            st.session_state.role = "admin"
+        else:
+            users = sheet.get_all_records()
+            for user in users:
+                if user["email"] == email and user["password"] == hash_password(password):
+                    st.session_state.user = user["name"]
+                    st.session_state.role = "auditor"
+                    st.session_state.department = user["department"]
+                    break
+            else:
+                st.error("Invalid email or password")
+
+    st.markdown("---")
+    if st.button("Register Instead"):
+        st.session_state.page = "register"
+
+def action_plan_ui(q):
+    st.warning(f"⚠ Action Plan for: {q}")
+    issue = st.text_input(f"Issue detected - {q}", key=f"{q}_issue")
+    action = st.text_input(f"Action to take - {q}", key=f"{q}_action")
+    responsible = st.text_input(f"Responsible - {q}", key=f"{q}_resp")
+    deadline = st.date_input(f"Deadline - {q}", key=f"{q}_date")
+    return {
+        "issue": issue,
+        "action": action,
+        "responsible": responsible,
+        "deadline": str(deadline)
+    }
+
+def show_checklist(zone, name):
+    st.subheader(f"📋 Checklist for {zone}")
+    questions = checklist_data[checklist_data["zone"] == zone]["question"].tolist()
+    actions = []
+
+    for q in questions:
+        answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=q)
+        if answer == "NC":
+            action_data = action_plan_ui(q)
+            action_data.update({
+                "auditor": name,
+                "zone": zone,
+                "date": datetime.today().strftime("%Y-%m-%d"),
+                "question": q
+            })
+            actions.append(action_data)
+
+    if st.button("✅ Submit Audit"):
+        planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
+        planning.to_excel("planning.xlsx", index=False)
+        st.success("Audit saved.")
+
+        if actions:
+            try:
+                old_actions = pd.read_excel("action_plans.xlsx")
+                combined = pd.concat([old_actions, pd.DataFrame(actions)], ignore_index=True)
+            except FileNotFoundError:
+                combined = pd.DataFrame(actions)
+
+            combined.to_excel("action_plans.xlsx", index=False)
+            st.success("Action Plans saved to action_plans.xlsx")
+
+        generate_and_send_pdf(name)
+        st.success("📤 PDF sent by email.")
+
+def show_dashboard():
+    st.title("📊 Dashboard")
+    total = len(planning)
+    done = len(planning[planning["checklist_done"] == "Yes"])
+    percent = int((done / total) * 100) if total else 0
+    st.metric("Audits Done", f"{percent}%")
+    st.metric("Open Actions", str(total - done))
+    st.metric("Closed Actions", str(done))
+
+def admin_panel():
+    st.title("🛠 Admin Panel")
+    st.subheader("Registered Users:")
+    users = pd.DataFrame(sheet.get_all_records())
+    st.dataframe(users)
+
+    st.subheader("Current Planning:")
+    st.dataframe(planning)
+
+    st.subheader("Checklist Questions:")
+    st.dataframe(checklist_data)
+
+    st.info("To update planning or checklist, just replace the Excel files and reload the app.")
+
+def send_late_emails():
+    try:
+        df = pd.read_excel("action_plans.xlsx")
+        today = pd.to_datetime(datetime.today().date())
+        df["deadline"] = pd.to_datetime(df["deadline"])
+
+        late = df[df["deadline"] < today]
+        if late.empty:
+            st.success("No late actions.")
+            return
+
+        yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
+        for _, row in late.iterrows():
+            message = (
+                f"⚠ LATE ACTION ALERT\n\n"
+                f"Responsible: {row['responsible']}\n"
+                f"Zone: {row['zone']}\n"
+                f"Question: {row['question']}\n"
+                f"Issue: {row['issue']}\n"
+                f"Action: {row['action']}\n"
+                f"Deadline: {row['deadline'].strftime('%Y-%m-%d')}\n"
+            )
+            try:
+                yag.send(to="ilyashtouch.sayli@gmail.com", subject="LPA Late Action", contents=message)
+            except Exception as e:
+                st.error(f"Email failed: {e}")
+
+        st.success("Late action emails sent.")
+    except FileNotFoundError:
+        st.error("action_plans.xlsx not found.")
+
+def generate_and_send_pdf(name):
+    try:
+        df = pd.read_excel("action_plans.xlsx")
+        user_data = df[df["auditor"] == name]
+        if user_data.empty:
+            return
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.cell(200, 10, txt=f"Audit Report - {name}", ln=True, align='C')
+        pdf.ln(10)
+
+        for _, row in user_data.iterrows():
+            pdf.multi_cell(0, 10, txt=(
+                f"Zone: {row['zone']}\n"
+                f"Date: {row['date']}\n"
+                f"Question: {row['question']}\n"
+                f"Issue: {row['issue']}\n"
+                f"Action: {row['action']}\n"
+                f"Responsible: {row['responsible']}\n"
+                f"Deadline: {row['deadline']}\n"
+                "------------------------"
+            ))
+
+        filename = f"report_{name}.pdf"
+        pdf.output(filename)
+
+        yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
+        yag.send(
+            to=RECEIVER_EMAIL,
+            subject=f"LPA Audit Report from {name}",
+            contents=f"Please find attached the audit report from {name}.",
+            attachments=filename
+        )
+    except Exception as e:
+        st.error(f"❌ Failed to generate/send PDF: {e}")
+
+# ---------- APP FLOW ---------- #
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "page" not in st.session_state:
+    st.session_state.page = "login"
+
+if st.session_state.user is None:
+    if st.session_state.page == "register":
+        register()
+    else:
+        login()
+else:
+    st.sidebar.title(f"Welcome, {st.session_state.user}")
+    if st.sidebar.button("Logout"):
+        st.session_state.user = None
+        st.session_state.page = "login"
+        st.rerun()
+
+    role = st.session_state.role
+    name = st.session_state.user
+
+    if role == "auditor":
+        st.title("🗓 Your Audit Tasks")
+        my_rows = planning[(planning["name"] == name) & (planning["checklist_done"] == "No")]
+        if my_rows.empty:
+            st.info("✅ You have no pending audits.")
+        else:
+            for _, row in my_rows.iterrows():
+                st.subheader(f"{row['date']} - {row['zone']}")
+                show_checklist(row["zone"], name)
+
+    elif role == "admin":
+        show_dashboard()
+        st.markdown("---")
+        admin_panel()
+
+    st.subheader("📧 Send Emails for Late Actions")
+    if st.button("Send Late Emails"):
+        send_late_emails()
+
