@@ -1,4 +1,3 @@
-# import os
 import yagmail
 from fpdf import FPDF
 import streamlit as st
@@ -9,34 +8,38 @@ import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
+
 # ---------- CONFIG ---------- #
 ADMIN_EMAIL = "i.htouch@miamaroc.com"
-ADMIN_PASSWORD = "admin123"  # Change as needed
+ADMIN_PASSWORD = "admin123"
 USERS_FILE = "users.xlsx"
 
 SENDER_EMAIL = "ilyaswork.11@gmail.com"
-SENDER_PASSWORD = "estk iyov khoo tjio"  # Use Gmail app password
+SENDER_PASSWORD = "estk iyov khoo tjio"
 RECEIVER_EMAIL = "ilyaswork.11@gmail.com"
 
-# Google Sheets setup (make sure service_account.json is in /.streamlit/secrets.toml or root)
+# ---------- Google Sheets Setup ---------- #
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-service_account_info = json.loads(st.secrets["gcp_service_account"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-client = gspread.authorize(creds)
 
-# Connect to user and action plan sheets
+try:
+    service_account_info = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+    client = gspread.authorize(creds)
+except Exception as e:
+    st.error(f"❌ Failed to authorize Google Sheets: {e}")
+    st.stop()
+
+# Connect to Google Sheets
 sheet = client.open("LPA_Users").sheet1
 action_plan_sheet = client.open("LPA_ActionPlans").sheet1
 
-# Ensure users file exists (used only locally for admin view)
+# Ensure local users file exists (used for admin panel)
 if not os.path.exists(USERS_FILE):
-    df_init = pd.DataFrame(columns=["name", "email", "password", "department"])
-    df_init.to_excel(USERS_FILE, index=False)
+    pd.DataFrame(columns=["name", "email", "password", "department"]).to_excel(USERS_FILE, index=False)
 
-# Load planning and checklist
+# Load Excel files
 planning = pd.read_excel("planning.xlsx")
 checklist_data = pd.read_excel("checklist.xlsx")
-
 
 # ---------- FUNCTIONS ---------- #
 def hash_password(pw):
@@ -54,12 +57,11 @@ def register():
 
     if st.button("Register"):
         if name and email and password and department:
-            all_emails = [row[1] for row in sheet.get_all_values()[1:]]  # Skip header row
+            all_emails = [row[1] for row in sheet.get_all_values()[1:]]
             if email in all_emails:
                 st.error("Email already registered.")
             else:
-                hashed_pw = hash_password(password)
-                sheet.append_row([name, email, hashed_pw, department])
+                sheet.append_row([name, email, hash_password(password), department])
                 st.success("✅ Registered successfully. You can now log in.")
         else:
             st.warning("⚠ Please fill in all fields.")
@@ -84,7 +86,6 @@ def login():
             else:
                 st.error("Invalid email or password")
 
-    st.markdown("---")
     if st.button("Register Instead"):
         st.session_state.page = "register"
 
@@ -141,63 +142,6 @@ def show_checklist(zone, name):
         st.success("📤 PDF sent by email.")
 
 
-def show_dashboard():
-    st.title("📊 Dashboard")
-    total = len(planning)
-    done = len(planning[planning["checklist_done"] == "Yes"])
-    percent = int((done / total) * 100) if total else 0
-    st.metric("Audits Done", f"{percent}%")
-    st.metric("Open Actions", str(total - done))
-    st.metric("Closed Actions", str(done))
-
-
-def admin_panel():
-    st.title("🛠 Admin Panel")
-    st.subheader("Registered Users:")
-    df = pd.read_excel(USERS_FILE)
-    st.dataframe(df)
-
-    st.subheader("Current Planning:")
-    st.dataframe(planning)
-
-    st.subheader("Checklist Questions:")
-    st.dataframe(checklist_data)
-
-    st.info("To update planning or checklist, just replace the Excel files and reload the app.")
-
-
-def send_late_emails():
-    try:
-        records = action_plan_sheet.get_all_records()
-        df = pd.DataFrame(records)
-        df["deadline"] = pd.to_datetime(df["deadline"], errors='coerce')
-        today = pd.to_datetime(datetime.today().date())
-
-        late = df[df["deadline"] < today]
-        if late.empty:
-            st.success("No late actions.")
-            return
-
-        yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
-        for _, row in late.iterrows():
-            message = (
-                f"⚠ LATE ACTION ALERT\n\n"
-                f"Responsible: {row['responsible']}\n"
-                f"Zone: {row['zone']}\n"
-                f"Question: {row['question']}\n"
-                f"Issue: {row['issue']}\n"
-                f"Action: {row['action']}\n"
-                f"Deadline: {row['deadline'].strftime('%Y-%m-%d')}\n"
-            )
-            try:
-                yag.send(to="ilyashtouch.sayli@gmail.com", subject="LPA Late Action", contents=message)
-            except Exception as e:
-                st.error(f"Email failed: {e}")
-
-        st.success("Late action emails sent.")
-    except Exception as e:
-        st.error(f"❌ Failed to load or send late actions: {e}")
-
 def generate_and_send_pdf(name):
     try:
         records = action_plan_sheet.get_all_records()
@@ -238,7 +182,64 @@ def generate_and_send_pdf(name):
         st.error(f"❌ Failed to generate/send PDF: {e}")
 
 
-# ---------- APP FLOW ---------- #
+def send_late_emails():
+    try:
+        records = action_plan_sheet.get_all_records()
+        df = pd.DataFrame(records)
+        df["deadline"] = pd.to_datetime(df["deadline"], errors='coerce')
+        today = pd.to_datetime(datetime.today().date())
+
+        late = df[df["deadline"] < today]
+        if late.empty:
+            st.success("No late actions.")
+            return
+
+        yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
+        for _, row in late.iterrows():
+            message = (
+                f"⚠ LATE ACTION ALERT\n\n"
+                f"Responsible: {row['responsible']}\n"
+                f"Zone: {row['zone']}\n"
+                f"Question: {row['question']}\n"
+                f"Issue: {row['issue']}\n"
+                f"Action: {row['action']}\n"
+                f"Deadline: {row['deadline'].strftime('%Y-%m-%d')}\n"
+            )
+            try:
+                yag.send(to="ilyashtouch.sayli@gmail.com", subject="LPA Late Action", contents=message)
+            except Exception as e:
+                st.error(f"Email failed: {e}")
+
+        st.success("Late action emails sent.")
+    except Exception as e:
+        st.error(f"❌ Failed to load or send late actions: {e}")
+
+
+def show_dashboard():
+    st.title("📊 Dashboard")
+    total = len(planning)
+    done = len(planning[planning["checklist_done"] == "Yes"])
+    percent = int((done / total) * 100) if total else 0
+    st.metric("Audits Done", f"{percent}%")
+    st.metric("Open Actions", str(total - done))
+    st.metric("Closed Actions", str(done))
+
+
+def admin_panel():
+    st.title("🛠 Admin Panel")
+    st.subheader("Registered Users:")
+    st.dataframe(pd.read_excel(USERS_FILE))
+
+    st.subheader("Current Planning:")
+    st.dataframe(planning)
+
+    st.subheader("Checklist Questions:")
+    st.dataframe(checklist_data)
+
+    st.info("To update planning or checklist, just replace the Excel files and reload the app.")
+
+
+# ---------- MAIN APP ---------- #
 if "user" not in st.session_state:
     st.session_state.user = None
 if "page" not in st.session_state:
