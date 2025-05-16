@@ -3,3 +3,5 @@ pandas
 fpdf
 yagmail
 openpyxl
+gspread
+oauth2client
