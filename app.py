@@ -176,44 +176,58 @@ def show_auditor_view(name):
                 st.success("📤 PDF sent by email.")
 
 
-def show_checklist(zone, name):
+def show_checklist_with_sections(zone, name):
     st.subheader(f"📋 Checklist for {zone}")
-    questions = checklist_data[checklist_data["zone"] == zone]["question"].tolist()
+
+    # Filter checklist for the zone
+    zone_checklist = checklist_data[checklist_data["zone"] == zone]
+
+    # Get unique sections in order
+    sections = zone_checklist["section"].unique()
+
     actions = []
 
-    for q in questions:
-        answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=q)
-        if answer == "NC":
-            action_data = action_plan_ui(q)
-            action_data.update({
-                "auditor": name,
-                "zone": zone,
-                "date": datetime.today().strftime("%Y-%m-%d"),
-                "question": q
-            })
-            actions.append(action_data)
+    for section in sections:
+        st.markdown(f"### {section}")
+        section_questions = zone_checklist[zone_checklist["section"] == section]
 
-    if st.button("✅ Submit Audit"):
+        for _, row in section_questions.iterrows():
+            q = row["question"]
+            answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=f"{zone}_{section}_{q}")
+            if answer == "NC":
+                action_data = action_plan_ui(q)
+                action_data.update({
+                    "auditor": name,
+                    "zone": zone,
+                    "date": datetime.today().strftime("%Y-%m-%d"),
+                    "question": q
+                })
+                actions.append(action_data)
+
+    if st.button(f"✅ Submit Audit for {zone}"):
+        # Mark audit as done in planning
         planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
         save_planning(planning)
-        st.success("Audit saved.")
+        st.success(f"Audit for {zone} saved.")
 
+        # Save audit results in Google Sheet
         save_audit_result(name, zone)
 
+        # Save action plans for NCs
         if actions:
             headers = ["auditor", "zone", "date", "question", "issue", "action", "responsible", "deadline"]
             existing = action_plan_sheet.get_all_values()
             if not existing or existing[0] != headers:
                 action_plan_sheet.insert_row(headers, 1)
-
             for action in actions:
                 row_data = [action.get(col, "") for col in headers]
                 action_plan_sheet.append_row(row_data)
+            st.success(f"✅ Action Plans for {zone} saved.")
 
-            st.success("✅ Action Plans saved to Google Sheet.")
-
+        # Generate and send PDF
         generate_and_send_pdf(name)
         st.success("📤 PDF sent by email.")
+
 
 
 def save_audit_result(auditor, zone):
