@@ -121,10 +121,19 @@ def action_plan_ui(q):
         "deadline": str(deadline)
     }
 
+
 def show_auditor_view(name):
+    global planning
+    planning = load_planning()  # Reload fresh
+
     st.title("🗓 Your Assigned Audits")
 
-    my_rows = planning[(planning["name"] == name) & (planning["checklist_done"] != "Yes")]
+    # Normalize name comparison (ignore case and whitespace)
+    normalized_name = name.strip().lower()
+    planning["name_clean"] = planning["name"].str.strip().str.lower()
+
+    # Filter pending audits
+    my_rows = planning[(planning["name_clean"] == normalized_name) & (planning["checklist_done"].str.lower() != "yes")]
 
     if my_rows.empty:
         st.info("✅ You have no pending audits.")
@@ -139,42 +148,7 @@ def show_auditor_view(name):
 
     for i, zone in enumerate(zones_to_do):
         with tabs[i]:
-            st.subheader(f"📋 Checklist - Zone: {zone}")
-            questions = checklist_data[checklist_data["zone"] == zone]["question"].tolist()
-            actions = []
-
-            for q in questions:
-                answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=f"{zone}_{q}")
-                if answer == "NC":
-                    action_data = action_plan_ui(q)
-                    action_data.update({
-                        "auditor": name,
-                        "zone": zone,
-                        "date": datetime.today().strftime("%Y-%m-%d"),
-                        "question": q
-                    })
-                    actions.append(action_data)
-
-            if st.button(f"✅ Submit Audit for {zone}", key=f"submit_{zone}"):
-                planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
-                save_planning(planning)
-                save_audit_result(name, zone)
-                st.success(f"✔ Audit for {zone} saved.")
-
-                if actions:
-                    headers = ["auditor", "zone", "date", "question", "issue", "action", "responsible", "deadline"]
-                    existing = action_plan_sheet.get_all_values()
-                    if not existing or existing[0] != headers:
-                        action_plan_sheet.insert_row(headers, 1)
-
-                    for action in actions:
-                        row_data = [action.get(col, "") for col in headers]
-                        action_plan_sheet.append_row(row_data)
-
-                    st.success(f"✅ Action Plans for {zone} saved.")
-
-                generate_and_send_pdf(name)
-                st.success("📤 PDF sent by email.")
+            show_checklist_with_sections(zone, name)
 
 
 def show_checklist_with_sections(zone, name):
