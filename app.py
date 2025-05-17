@@ -32,14 +32,31 @@ except Exception as e:
 # Connect to Google Sheets
 sheet = client.open("LPA_Users").sheet1
 action_plan_sheet = client.open("LPA_ActionPlans").sheet1
+# Google Sheets setup for audit result tracking
+audit_results_sheet = client.open("LPA_Audit_Results").sheet1
 
 # Ensure local users file exists (used for admin panel)
 if not os.path.exists(USERS_FILE):
     pd.DataFrame(columns=["name", "email", "password", "department"]).to_excel(USERS_FILE, index=False)
 
-# Load Excel files
-planning = pd.read_excel("planning.xlsx")
-checklist_data = pd.read_excel("checklist.xlsx")
+# Load planning and checklist from Google Sheets
+def load_planning():
+    sheet = client.open("LPA_Planning").sheet1
+    data = sheet.get_all_records()
+    return pd.DataFrame(data)
+
+def load_checklist():
+    sheet = client.open("LPA_Checklist").sheet1
+    data = sheet.get_all_records()
+    return pd.DataFrame(data)
+
+planning = load_planning()
+checklist_data = load_checklist()
+def save_planning(df):
+    sheet = client.open("LPA_Planning").sheet1
+    sheet.clear()
+    sheet.update([df.columns.values.tolist()] + df.values.tolist())
+
 
 # ---------- FUNCTIONS ---------- #
 def hash_password(pw):
@@ -140,7 +157,7 @@ def show_auditor_view(name):
 
             if st.button(f"✅ Submit Audit for {zone}", key=f"submit_{zone}"):
                 planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
-                planning.to_excel("planning.xlsx", index=False)
+                save_planning(planning)
                 st.success(f"✔ Audit for {zone} saved.")
 
                 if actions:
@@ -178,8 +195,10 @@ def show_checklist(zone, name):
 
     if st.button("✅ Submit Audit"):
         planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
-        planning.to_excel("planning.xlsx", index=False)
+        save_planning(planning)
         st.success("Audit saved.")
+
+        save_audit_result(name, zone)
 
         if actions:
             headers = ["auditor", "zone", "date", "question", "issue", "action", "responsible", "deadline"]
@@ -195,6 +214,17 @@ def show_checklist(zone, name):
 
         generate_and_send_pdf(name)
         st.success("📤 PDF sent by email.")
+
+
+def save_audit_result(auditor, zone):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    headers = ["auditor", "zone", "timestamp"]
+    existing = audit_results_sheet.get_all_values()
+
+    if not existing or existing[0] != headers:
+        audit_results_sheet.insert_row(headers, 1)
+
+    audit_results_sheet.append_row([auditor, zone, now])
 
 
 def generate_and_send_pdf(name):
@@ -292,6 +322,16 @@ def admin_panel():
     st.dataframe(checklist_data)
 
     st.info("To update planning or checklist, just replace the Excel files and reload the app.")
+    show_audit_results()
+
+def show_audit_results():
+    st.subheader("📄 Submitted Audits")
+    data = audit_results_sheet.get_all_records()
+    if data:
+        df = pd.DataFrame(data)
+        st.dataframe(df)
+    else:
+        st.info("No audit submissions yet.")
 
 
 # ---------- MAIN APP ---------- #
