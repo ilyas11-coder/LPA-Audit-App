@@ -158,6 +158,7 @@ def show_auditor_view(name):
             if st.button(f"✅ Submit Audit for {zone}", key=f"submit_{zone}"):
                 planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
                 save_planning(planning)
+                save_audit_result(name, zone)
                 st.success(f"✔ Audit for {zone} saved.")
 
                 if actions:
