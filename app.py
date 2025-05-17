@@ -4,15 +4,12 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import hashlib
-import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import json
 
 # ---------- CONFIG ---------- #
 ADMIN_EMAIL = "i.htouch@miamaroc.com"
 ADMIN_PASSWORD = "admin123"
-USERS_FILE = "users.xlsx"
 
 SENDER_EMAIL = "ilyaswork.11@gmail.com"
 SENDER_PASSWORD = "estk iyov khoo tjio"
@@ -30,20 +27,19 @@ except Exception as e:
     st.stop()
 
 # Connect to Google Sheets
-sheet = client.open("LPA_Users").sheet1
+users_sheet = client.open("LPA_Users").sheet1
 action_plan_sheet = client.open("LPA_ActionPlans").sheet1
-# Google Sheets setup for audit result tracking
 audit_results_sheet = client.open("LPA_Audit_Results").sheet1
 
-# Ensure local users file exists (used for admin panel)
-if not os.path.exists(USERS_FILE):
-    pd.DataFrame(columns=["name", "email", "password", "department"]).to_excel(USERS_FILE, index=False)
-
-# Load planning and checklist from Google Sheets
 def load_planning():
     sheet = client.open("LPA_Planning").sheet1
     data = sheet.get_all_records()
     return pd.DataFrame(data)
+
+def save_planning(df):
+    sheet = client.open("LPA_Planning").sheet1
+    sheet.clear()
+    sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def load_checklist():
     sheet = client.open("LPA_Checklist").sheet1
@@ -52,16 +48,10 @@ def load_checklist():
 
 planning = load_planning()
 checklist_data = load_checklist()
-def save_planning(df):
-    sheet = client.open("LPA_Planning").sheet1
-    sheet.clear()
-    sheet.update([df.columns.values.tolist()] + df.values.tolist())
-
 
 # ---------- FUNCTIONS ---------- #
 def hash_password(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
-
 
 def register():
     st.title("📝 Register")
@@ -74,15 +64,14 @@ def register():
 
     if st.button("Register"):
         if name and email and password and department:
-            all_emails = [row[1] for row in sheet.get_all_values()[1:]]
+            all_emails = [row[1] for row in users_sheet.get_all_values()[1:]]
             if email in all_emails:
                 st.error("Email already registered.")
             else:
-                sheet.append_row([name, email, hash_password(password), department])
+                users_sheet.append_row([name, email, hash_password(password), department])
                 st.success("✅ Registered successfully. You can now log in.")
         else:
             st.warning("⚠ Please fill in all fields.")
-
 
 def login():
     st.title("🔐 Login")
@@ -94,7 +83,7 @@ def login():
             st.session_state.user = "Admin"
             st.session_state.role = "admin"
         else:
-            user_records = sheet.get_all_records()
+            user_records = users_sheet.get_all_records()
             df = pd.DataFrame(user_records)
             row = df[df['email'] == email]
             if not row.empty and row.iloc[0]['password'] == hash_password(password):
@@ -106,7 +95,6 @@ def login():
 
     if st.button("Register Instead"):
         st.session_state.page = "register"
-
 
 def action_plan_ui(q):
     st.warning(f"⚠ Action Plan for: {q}")
@@ -121,18 +109,13 @@ def action_plan_ui(q):
         "deadline": str(deadline)
     }
 
-
 def show_auditor_view(name):
     global planning
-    planning = load_planning()  # Reload fresh
+    planning = load_planning()
 
     st.title("🗓 Your Assigned Audits")
-
-    # Normalize name comparison (ignore case and whitespace)
     normalized_name = name.strip().lower()
     planning["name_clean"] = planning["name"].str.strip().str.lower()
-
-    # Filter pending audits
     my_rows = planning[(planning["name_clean"] == normalized_name) & (planning["checklist_done"].str.lower() != "yes")]
 
     if my_rows.empty:
@@ -145,27 +128,19 @@ def show_auditor_view(name):
         return
 
     tabs = st.tabs(zones_to_do)
-
     for i, zone in enumerate(zones_to_do):
         with tabs[i]:
             show_checklist_with_sections(zone, name)
 
-
 def show_checklist_with_sections(zone, name):
     st.subheader(f"📋 Checklist for {zone}")
-
-    # Filter checklist for the zone
     zone_checklist = checklist_data[checklist_data["zone"] == zone]
-
-    # Get unique sections in order
     sections = zone_checklist["section"].unique()
-
     actions = []
 
     for section in sections:
         st.markdown(f"### {section}")
         section_questions = zone_checklist[zone_checklist["section"] == section]
-
         for _, row in section_questions.iterrows():
             q = row["question"]
             answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=f"{zone}_{section}_{q}")
@@ -180,15 +155,11 @@ def show_checklist_with_sections(zone, name):
                 actions.append(action_data)
 
     if st.button(f"✅ Submit Audit for {zone}"):
-        # Mark audit as done in planning
         planning.loc[(planning["name"] == name) & (planning["zone"] == zone), "checklist_done"] = "Yes"
         save_planning(planning)
         st.success(f"Audit for {zone} saved.")
-
-        # Save audit results in Google Sheet
         save_audit_result(name, zone)
 
-        # Save action plans for NCs
         if actions:
             headers = ["auditor", "zone", "date", "question", "issue", "action", "responsible", "deadline"]
             existing = action_plan_sheet.get_all_values()
@@ -199,22 +170,16 @@ def show_checklist_with_sections(zone, name):
                 action_plan_sheet.append_row(row_data)
             st.success(f"✅ Action Plans for {zone} saved.")
 
-        # Generate and send PDF
         generate_and_send_pdf(name)
         st.success("📤 PDF sent by email.")
-
-
 
 def save_audit_result(auditor, zone):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     headers = ["auditor", "zone", "timestamp"]
     existing = audit_results_sheet.get_all_values()
-
     if not existing or existing[0] != headers:
         audit_results_sheet.insert_row(headers, 1)
-
     audit_results_sheet.append_row([auditor, zone, now])
-
 
 def generate_and_send_pdf(name):
     try:
@@ -246,15 +211,10 @@ def generate_and_send_pdf(name):
         pdf.output(filename)
 
         yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
-        yag.send(
-            to=RECEIVER_EMAIL,
-            subject=f"LPA Audit Report from {name}",
-            contents=f"Please find attached the audit report from {name}.",
-            attachments=filename
-        )
+        yag.send(to=RECEIVER_EMAIL, subject=f"LPA Audit Report from {name}",
+                 contents=f"Please find attached the audit report from {name}.", attachments=filename)
     except Exception as e:
         st.error(f"❌ Failed to generate/send PDF: {e}")
-
 
 def send_late_emails():
     try:
@@ -262,8 +222,8 @@ def send_late_emails():
         df = pd.DataFrame(records)
         df["deadline"] = pd.to_datetime(df["deadline"], errors='coerce')
         today = pd.to_datetime(datetime.today().date())
-
         late = df[df["deadline"] < today]
+
         if late.empty:
             st.success("No late actions.")
             return
@@ -283,11 +243,9 @@ def send_late_emails():
                 yag.send(to="ilyashtouch.sayli@gmail.com", subject="LPA Late Action", contents=message)
             except Exception as e:
                 st.error(f"Email failed: {e}")
-
         st.success("Late action emails sent.")
     except Exception as e:
         st.error(f"❌ Failed to load or send late actions: {e}")
-
 
 def show_dashboard():
     st.title("📊 Dashboard")
@@ -298,11 +256,12 @@ def show_dashboard():
     st.metric("Open Actions", str(total - done))
     st.metric("Closed Actions", str(done))
 
-
 def admin_panel():
     st.title("🛠 Admin Panel")
+
     st.subheader("Registered Users:")
-    st.dataframe(pd.read_excel(USERS_FILE))
+    user_data = users_sheet.get_all_records()
+    st.dataframe(pd.DataFrame(user_data))
 
     st.subheader("Current Planning:")
     st.dataframe(planning)
@@ -310,10 +269,6 @@ def admin_panel():
     st.subheader("Checklist Questions:")
     st.dataframe(checklist_data)
 
-    st.info("To update planning or checklist, just replace the Excel files and reload the app.")
-    show_audit_results()
-
-def show_audit_results():
     st.subheader("📄 Submitted Audits")
     data = audit_results_sheet.get_all_records()
     if data:
@@ -321,7 +276,6 @@ def show_audit_results():
         st.dataframe(df)
     else:
         st.info("No audit submissions yet.")
-
 
 # ---------- MAIN APP ---------- #
 if "user" not in st.session_state:
@@ -346,8 +300,6 @@ else:
 
     if role == "auditor":
         show_auditor_view(name)
-
-
     elif role == "admin":
         show_dashboard()
         st.markdown("---")
