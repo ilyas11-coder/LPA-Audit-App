@@ -42,12 +42,14 @@ def save_planning(df):
     sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 def load_checklist():
-    sheet = client.open("LPA_Checklist").sheet1
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
-
-planning = load_planning()
-checklist_data = load_checklist()
+    try:
+        sheet = client.open("LPA_Checklist").sheet1
+        raw = sheet.get_all_values()
+        st.write("✅ Checklist raw data:", raw)
+        return pd.DataFrame(raw[1:], columns=raw[0])
+    except Exception as e:
+        st.error(f"❌ Failed to load checklist: {e}")
+        return pd.DataFrame()
 
 # ---------- FUNCTIONS ---------- #
 def hash_password(pw):
