@@ -26,30 +26,25 @@ except Exception as e:
     st.error(f"❌ Failed to authorize Google Sheets: {e}")
     st.stop()
 
-# Connect to Google Sheets
+# Google Sheets
 users_sheet = client.open("LPA_Users").sheet1
 action_plan_sheet = client.open("LPA_ActionPlans").sheet1
 audit_results_sheet = client.open("LPA_Audit_Results").sheet1
+planning_sheet = client.open("LPA_Planning").sheet1
+checklist_sheet = client.open("LPA_Checklist").sheet1
 
+# ---------- LOAD DATA FUNCTIONS ---------- #
 def load_planning():
-    sheet = client.open("LPA_Planning").sheet1
-    data = sheet.get_all_records()
+    data = planning_sheet.get_all_records()
+    return pd.DataFrame(data)
+
+def load_checklist():
+    data = checklist_sheet.get_all_records()
     return pd.DataFrame(data)
 
 def save_planning(df):
-    sheet = client.open("LPA_Planning").sheet1
-    sheet.clear()
-    sheet.update([df.columns.values.tolist()] + df.values.tolist())
-
-def load_checklist():
-    try:
-        sheet = client.open("LPA_Checklist").sheet1
-        raw = sheet.get_all_values()
-        st.write("✅ Checklist raw data:", raw)
-        return pd.DataFrame(raw[1:], columns=raw[0])
-    except Exception as e:
-        st.error(f"❌ Failed to load checklist: {e}")
-        return pd.DataFrame()
+    planning_sheet.clear()
+    planning_sheet.update([df.columns.values.tolist()] + df.values.tolist())
 
 # ---------- FUNCTIONS ---------- #
 def hash_password(pw):
@@ -111,13 +106,13 @@ def action_plan_ui(q):
         "deadline": str(deadline)
     }
 
-def show_auditor_view(name):
-    global planning
+def show_auditor_view(name, checklist_data):
     planning = load_planning()
-
     st.title("🗓 Your Assigned Audits")
+
     normalized_name = name.strip().lower()
     planning["name_clean"] = planning["name"].str.strip().str.lower()
+
     my_rows = planning[(planning["name_clean"] == normalized_name) & (planning["checklist_done"].str.lower() != "yes")]
 
     if my_rows.empty:
@@ -125,16 +120,13 @@ def show_auditor_view(name):
         return
 
     zones_to_do = my_rows["zone"].tolist()
-    if not zones_to_do:
-        st.info("✅ All checklists completed.")
-        return
-
     tabs = st.tabs(zones_to_do)
+
     for i, zone in enumerate(zones_to_do):
         with tabs[i]:
-            show_checklist_with_sections(zone, name)
+            show_checklist_with_sections(zone, name, checklist_data, planning)
 
-def show_checklist_with_sections(zone, name):
+def show_checklist_with_sections(zone, name, checklist_data, planning):
     st.subheader(f"📋 Checklist for {zone}")
     zone_checklist = checklist_data[checklist_data["zone"] == zone]
     sections = zone_checklist["section"].unique()
@@ -143,6 +135,7 @@ def show_checklist_with_sections(zone, name):
     for section in sections:
         st.markdown(f"### {section}")
         section_questions = zone_checklist[zone_checklist["section"] == section]
+
         for _, row in section_questions.iterrows():
             q = row["question"]
             answer = st.radio(q, ["C", "NC", "NCC", "NA"], key=f"{zone}_{section}_{q}")
@@ -198,23 +191,21 @@ def generate_and_send_pdf(name):
         pdf.ln(10)
 
         for _, row in user_data.iterrows():
-            pdf.multi_cell(0, 10, txt=(
-                f"Zone: {row['zone']}\n"
-                f"Date: {row['date']}\n"
-                f"Question: {row['question']}\n"
-                f"Issue: {row['issue']}\n"
-                f"Action: {row['action']}\n"
-                f"Responsible: {row['responsible']}\n"
-                f"Deadline: {row['deadline']}\n"
-                "------------------------"
-            ))
+            pdf.multi_cell(0, 10, txt=(f"Zone: {row['zone']}\nDate: {row['date']}\nQuestion: {row['question']}\n"
+                                       f"Issue: {row['issue']}\nAction: {row['action']}\n"
+                                       f"Responsible: {row['responsible']}\nDeadline: {row['deadline']}\n"
+                                       "------------------------"))
 
         filename = f"report_{name}.pdf"
         pdf.output(filename)
 
         yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
-        yag.send(to=RECEIVER_EMAIL, subject=f"LPA Audit Report from {name}",
-                 contents=f"Please find attached the audit report from {name}.", attachments=filename)
+        yag.send(
+            to=RECEIVER_EMAIL,
+            subject=f"LPA Audit Report from {name}",
+            contents=f"Please find attached the audit report from {name}.",
+            attachments=filename
+        )
     except Exception as e:
         st.error(f"❌ Failed to generate/send PDF: {e}")
 
@@ -225,22 +216,15 @@ def send_late_emails():
         df["deadline"] = pd.to_datetime(df["deadline"], errors='coerce')
         today = pd.to_datetime(datetime.today().date())
         late = df[df["deadline"] < today]
-
         if late.empty:
             st.success("No late actions.")
             return
 
         yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
         for _, row in late.iterrows():
-            message = (
-                f"⚠ LATE ACTION ALERT\n\n"
-                f"Responsible: {row['responsible']}\n"
-                f"Zone: {row['zone']}\n"
-                f"Question: {row['question']}\n"
-                f"Issue: {row['issue']}\n"
-                f"Action: {row['action']}\n"
-                f"Deadline: {row['deadline'].strftime('%Y-%m-%d')}\n"
-            )
+            message = (f"⚠ LATE ACTION ALERT\n\nResponsible: {row['responsible']}\nZone: {row['zone']}\n"
+                       f"Question: {row['question']}\nIssue: {row['issue']}\nAction: {row['action']}\n"
+                       f"Deadline: {row['deadline'].strftime('%Y-%m-%d')}")
             try:
                 yag.send(to="ilyashtouch.sayli@gmail.com", subject="LPA Late Action", contents=message)
             except Exception as e:
@@ -250,6 +234,7 @@ def send_late_emails():
         st.error(f"❌ Failed to load or send late actions: {e}")
 
 def show_dashboard():
+    planning = load_planning()
     st.title("📊 Dashboard")
     total = len(planning)
     done = len(planning[planning["checklist_done"] == "Yes"])
@@ -260,17 +245,20 @@ def show_dashboard():
 
 def admin_panel():
     st.title("🛠 Admin Panel")
-
-    st.subheader("Registered Users:")
-    user_data = users_sheet.get_all_records()
-    st.dataframe(pd.DataFrame(user_data))
-
     st.subheader("Current Planning:")
+    planning = load_planning()
     st.dataframe(planning)
 
     st.subheader("Checklist Questions:")
-    st.dataframe(checklist_data)
+    try:
+        checklist_data = load_checklist()
+        st.dataframe(checklist_data)
+    except Exception as e:
+        st.error("❌ Could not load checklist.")
 
+    show_audit_results()
+
+def show_audit_results():
     st.subheader("📄 Submitted Audits")
     data = audit_results_sheet.get_all_records()
     if data:
@@ -291,6 +279,12 @@ if st.session_state.user is None:
     else:
         login()
 else:
+    try:
+        checklist_data = load_checklist()
+    except Exception as e:
+        st.error("❌ Could not load checklist data.")
+        st.stop()
+
     st.sidebar.title(f"Welcome, {st.session_state.user}")
     if st.sidebar.button("Logout"):
         st.session_state.user = None
@@ -301,7 +295,7 @@ else:
     name = st.session_state.user
 
     if role == "auditor":
-        show_auditor_view(name)
+        show_auditor_view(name, checklist_data)
     elif role == "admin":
         show_dashboard()
         st.markdown("---")
