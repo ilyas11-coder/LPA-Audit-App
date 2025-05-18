@@ -128,8 +128,19 @@ def show_auditor_view(name, checklist_data):
 
 def show_checklist_with_sections(zone, name, checklist_data, planning):
     st.subheader(f"📋 Checklist for {zone}")
+
+    required_columns = {"zone", "section", "question"}
+    if checklist_data.empty or not required_columns.issubset(set(checklist_data.columns)):
+        st.error("❌ Checklist data is missing or not formatted correctly.")
+        return
+
     zone_checklist = checklist_data[checklist_data["zone"] == zone]
+    if zone_checklist.empty:
+        st.warning(f"No checklist questions found for zone: {zone}")
+        return
+
     sections = zone_checklist["section"].unique()
+
     actions = []
 
     for section in sections:
