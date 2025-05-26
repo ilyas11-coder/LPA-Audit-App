@@ -43,6 +43,56 @@ try:
 except Exception as e:
     st.error(f"❌ Error listing Google Sheets: {e}")
 
+import streamlit as st
+import gspread
+
+# Cache Google Sheets client to avoid reruns overloading API
+@st.cache_resource
+def get_gspread_client():
+    return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+
+# Connect once
+client = get_gspread_client()
+
+# Initialize all sheets as None
+users_sheet = None
+planning_sheet = None
+checklist_sheet = None
+audit_results_sheet = None
+action_plans_sheet = None
+
+# Access Google Sheets only after successful login
+if "user_email" in st.session_state and st.session_state["user_email"]:
+
+    try:
+        users_sheet = client.open("LPA_Users").worksheet("Sheet1")  # or rename if not Sheet1
+    except Exception as e:
+        st.error(f"❌ Failed to access 'LPA_Users': {e}")
+        st.stop()
+
+    try:
+        planning_sheet = client.open("LPA_Planning").worksheet("Sheet1")
+    except Exception as e:
+        st.error(f"❌ Failed to access 'LPA_Planning': {e}")
+        st.stop()
+
+    try:
+        checklist_sheet = client.open("LPA_Checklist").worksheet("Sheet1")
+    except Exception as e:
+        st.error(f"❌ Failed to access 'LPA_Checklist': {e}")
+        st.stop()
+
+    try:
+        audit_results_sheet = client.open("LPA_Audit_Results").worksheet("Sheet1")
+    except Exception as e:
+        st.error(f"❌ Failed to access 'LPA_Audit_Results': {e}")
+        st.stop()
+
+    try:
+        action_plans_sheet = client.open("LPA_ActionPlans").worksheet("Sheet1")
+    except Exception as e:
+        st.error(f"❌ Failed to access 'LPA_ActionPlans': {e}")
+        st.stop()
 
 # ---------- LOAD DATA FUNCTIONS ---------- #
 def load_planning():
