@@ -33,6 +33,17 @@ audit_results_sheet = client.open("LPA_Audit_Results").sheet1
 planning_sheet = client.open("LPA_Planning").sheet1
 checklist_sheet = client.open("LPA_Checklist").sheet1
 
+st.header("🧪 Test: Google Sheets Access")
+
+try:
+    spreadsheet_list = client.openall()
+    st.success("✅ Successfully listed Google Sheets accessible by the service account:")
+    for sheet in spreadsheet_list:
+        st.write(f"- {sheet.title}")
+except Exception as e:
+    st.error(f"❌ Error listing Google Sheets: {e}")
+
+
 # ---------- LOAD DATA FUNCTIONS ---------- #
 def load_planning():
     data = planning_sheet.get_all_records()
